@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Excel Editor Web</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    table, th, td { border: 1px solid #333; }
+    th, td { padding: 5px; text-align: left; }
+    td { min-width: 80px; }
+    input[type="file"] { margin-bottom: 10px; }
+    button { margin-right: 10px; margin-bottom: 10px; padding: 5px 10px; }
+  </style>
+</head>
+<body>
+  <h2>Excel Editor Web</h2>
+
+  <input type="file" id="inputFile" />
+  <button id="loadDefault">Load Excel mặc định</button>
+  <button id="saveJSON">Lưu JSON</button>
+  <button id="saveExcel">Lưu Excel</button>
+
+  <div id="tableContainer"></div>
+
+  <script>
+    const inputFile = document.getElementById('inputFile');
+    const tableContainer = document.getElementById('tableContainer');
+    const loadDefault = document.getElementById('loadDefault');
+    const saveJSON = document.getElementById('saveJSON');
+    const saveExcel = document.getElementById('saveExcel');
+    let workbookGlobal = null;
+
+    // Hàm hiển thị bảng
+    function renderTable(workbook) {
+      workbookGlobal = workbook; // lưu workbook để lưu về sau
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const html = XLSX.utils.sheet_to_html(sheet, { editable: true });
+      tableContainer.innerHTML = html;
+    }
+
+    // Chọn file từ máy
+    inputFile.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, {type: 'array'});
+        renderTable(workbook);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    // Load file mặc định từ repo
+    loadDefault.addEventListener('click', () => {
+      fetch('data.xlsx') // đổi tên file Excel nếu khác
+        .then(res => res.arrayBuffer())
+        .then(data => {
+          const workbook = XLSX.read(data, {type: 'array'});
+          renderTable(workbook);
+        });
+    });
+
+    // Lưu bảng hiện tại về JSON
+    saveJSON.addEventListener('click', () => {
+      if (!workbookGlobal) return alert("Chưa có dữ liệu để lưu!");
+      const sheet = workbookGlobal.Sheets[workbookGlobal.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "data.json";
+      link.click();
+    });
+
+    // Lưu bảng hiện tại về Excel
+    saveExcel.addEventListener('click', () => {
+      if (!workbookGlobal) return alert("Chưa có dữ liệu để lưu!");
+      // Cập nhật dữ liệu từ HTML vào workbook
+      const table = tableContainer.querySelector("table");
+      const newSheet = XLSX.utils.table_to_sheet(table);
+      workbookGlobal.Sheets[workbookGlobal.SheetNames[0]] = newSheet;
+      const wbout = XLSX.write(workbookGlobal, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], { type: "application/octet-stream" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "data_edited.xlsx";
+      link.click();
+    });
+  </script>
+</body>
+</html>

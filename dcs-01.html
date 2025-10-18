@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tra cứu địa chỉ nâng cao</title>
+<style>
+:root{--bg:#f6fbff;--card:#fff;--accent:#0b74de;--muted:#666}
+body{font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:0;background:var(--bg);color:#222}
+.wrap{max-width:100%;margin:0;padding:20px}
+header{display:flex;flex-direction:column;gap:8px;margin-bottom:18px}
+h1{margin:0;font-size:20px}
+.card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 6px 20px rgba(12,20,40,0.06)}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+input[type=text],select{padding:8px 10px;border-radius:8px;border:1px solid #e6eef8;min-width:200px;flex:1}
+button{background:var(--accent);color:#fff;border:0;padding:8px 12px;border-radius:8px;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent);border:1px solid #d6e9fb}
+.table-wrap{overflow-x:auto;overflow-y:auto;max-height:500px;border:1px solid #d0e4ff;border-radius:8px}
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th,td{padding:10px;border:1px solid #d0e4ff;text-align:left;font-size:14px;word-wrap:break-word}
+th{background:#f0f6fb;position:sticky;top:0;z-index:10;user-select:none;position:relative}
+th .resizer{position:absolute;right:0;top:0;width:6px;height:100%;cursor:col-resize;user-select:none}
+tbody tr:hover{background-color:#eef6ff}
+td[contenteditable="true"]{background:#fffbe6;border:1px solid #ffd700}
+td[contenteditable="true"]:focus{outline:2px solid #0b74de}
+mark{background:yellow;color:black}
+.small{font-size:13px;color:var(--muted)}
+.actions button{margin-right:6px}
+.search-list{position:relative;flex:1}
+.suggest{position:absolute;background:#fff;border-radius:6px;box-shadow:0 6px 20px rgba(12,20,40,0.06);width:100%;max-height:160px;overflow:auto;z-index:40}
+.suggest div{padding:8px;cursor:pointer}
+.suggest div:hover{background:#f0f6fb}
+.flex{display:flex;gap:10px;align-items:center}
+.right{margin-left:auto}
+.badge{background:#eef6ff;color:var(--accent);padding:4px 8px;border-radius:999px;font-size:13px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,0.35);display:none;align-items:center;justify-content:center}
+.modal .box{width:90%;max-width:720px;background:#fff;padding:18px;border-radius:12px}
+.modal.show{display:flex}
+label{display:block;margin-top:8px;font-size:13px}
+textarea{width:100%;padding:8px;border-radius:8px;border:1px solid #e6eef8}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<h1>Tra cứu địa chỉ nâng cao</h1>
+<div class="small">Upload Excel/CSV, inline edit, undo/redo, lưu server/local, tìm kiếm highlight.</div>
+</header>
+
+<div class="card">
+<div class="controls">
+<input id="fileInput" type="file" accept=".xlsx,.xls,.csv">
+<button id="loadExample">Tải ví dụ CSV</button>
+<button id="undoBtn" class="ghost">Undo</button>
+<button id="redoBtn" class="ghost">Redo</button>
+<button id="exportBtn" class="ghost">Xuất Excel</button>
+<button id="uploadServerBtn" class="ghost">Tải lên web</button>
+<div class="right">
+<span class="badge" id="count">0 địa chỉ</span>
+</div>
+</div>
+
+<div class="controls">
+<div class="search-list" style="flex:1;min-width:220px">
+<input id="search" type="text" placeholder="Tìm theo tên tag hoặc địa chỉ">
+<div id="suggest" class="suggest" style="display:none"></div>
+</div>
+<input id="filterField" type="text" placeholder="Tên cột (ví dụ: tag,name,address)">
+<button id="addBtn">Thêm mới</button>
+</div>
+
+<div id="tableWrap"></div>
+</div>
+</div>
+
+<div id="modal" class="modal">
+<div class="box">
+<h3 id="modalTitle">Sửa địa chỉ</h3>
+<div id="formFields"></div>
+<div style="margin-top:12px;text-align:right">
+<button id="cancelBtn" class="ghost">Hủy</button>
+<button id="saveBtn">Lưu</button>
+</div>
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// ==================== Variables ====================
+let data=[],columns=[],undoStack=[],redoStack=[];
+const fileInput=document.getElementById('fileInput');
+const tableWrap=document.getElementById('tableWrap');
+const countEl=document.getElementById('count');
+const searchInput=document.getElementById('search');
+const suggest=document.getElementById('suggest');
+const filterField=document.getElementById('filterField');
+const modal=document.getElementById('modal');
+const formFields=document.getElementById('formFields');
+const modalTitle=document.getElementById('modalTitle');
+
+// ==================== Functions ====================
+function normalizeObject(obj){ const o={}; Object.keys(obj).forEach(k=>{o[k.trim()]=typeof obj[k]==='string'?obj[k].trim():obj[k];}); return o;}
+function pushUndo(){ undoStack.push(JSON.stringify(data)); if(undoStack.length>50) undoStack.shift(); redoStack=[]; }
+function undo(){ if(!undoStack.length) return; redoStack.push(JSON.stringify(data)); data=JSON.parse(undoStack.pop()); renderTable(data); saveToLocal();}
+function redo(){ if(!redoStack.length) return; undoStack.push(JSON.stringify(data)); data=JSON.parse(redoStack.pop()); renderTable(data); saveToLocal();}
+function saveToLocal(){ localStorage.setItem("excelData",JSON.stringify(data)); localStorage.setItem("excelColumns",JSON.stringify(columns)); }
+function loadFromLocal(){ try{ const d=localStorage.getItem("excelData"); const c=localStorage.getItem("excelColumns"); if(d){ data=JSON.parse(d); columns=JSON.parse(c||"[]"); }else{ data=[]; columns=[];} }catch(e){data=[];columns=[];} }
+async function saveToServer(){ try{ const res=await fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}); const json=await res.json(); if(!json.success) alert("Lỗi lưu server"); }catch(e){alert("Lỗi kết nối server");} }
+async function loadFromServer(){ try{ const res=await fetch("/data.json"); if(res.status===200){ data=await res.json(); columns=Object.keys(data[0]||{}); } }catch(e){ data=[]; columns=[]; } }
+
+// ==================== Render Table ====================
+function renderTable(arr){
+  countEl.textContent=arr.length+" địa chỉ";
+  if(!arr.length){tableWrap.innerHTML='<div class="small">(Không có dữ liệu)</div>';return;}
+  const cols=columns.length?columns:Array.from(new Set(arr.flatMap(r=>Object.keys(r))));
+  columns=cols;
+  let html='<table><thead><tr>'+cols.map(c=>`<th>${c}</th>`).join('')+'<th>Hành động</th></tr></thead><tbody>';
+  arr.forEach((r,i)=>{html+='<tr>'+cols.map(c=>`<td>${r[c]||""}</td>`).join('')+
+  `<td class="actions"><button onclick="editRow(${i})">Sửa</button> <button onclick="deleteRow(${i})">Xóa</button></td>`;});
+  html+='</tbody></table>';
+  tableWrap.innerHTML='<div class="table-wrap">'+html+'</div>';
+  const table=tableWrap.querySelector('table');
+  makeResizable(table);
+
+  table.querySelectorAll('tbody tr').forEach((tr,rowIndex)=>{
+    tr.querySelectorAll('td').forEach((td,colIndex)=>{
+      if(colIndex>=columns.length) return;
+      td.setAttribute('contenteditable','true');
+      td.addEventListener('blur',()=>{
+        pushUndo(); const colName=columns[colIndex]; data[rowIndex][colName]=td.textContent.trim(); saveToLocal(); saveToServer();
+      });
+      td.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();td.blur();}});
+    });
+  });
+}
+
+// ==================== Resize Columns ====================
+function makeResizable(table){
+  const ths=table.querySelectorAll('th');
+  ths.forEach((th,i)=>{
+    if(i===ths.length-1) return;
+    const resizer=document.createElement('div'); resizer.classList.add('resizer'); th.appendChild(resizer);
+    let startX,startWidth;
+    resizer.addEventListener('mousedown',e=>{
+      startX=e.pageX; startWidth=th.offsetWidth;
+      document.addEventListener('mousemove',onMouseMove); document.addEventListener('mouseup',onMouseUp);
+    });
+    function onMouseMove(e){const newWidth=startWidth+(e.pageX-startX); th.style.width=newWidth+'px'; table.querySelectorAll('tr').forEach(tr=>{tr.children[i].style.width=newWidth+'px';});}
+    function onMouseUp(){document.removeEventListener('mousemove',onMouseMove); document.removeEventListener('mouseup',onMouseUp);}
+  });
+}
+
+// ==================== Modal ====================
+function openModalFor(obj={},idx=''){
+  modalTitle.textContent=idx===''?'Thêm địa chỉ':'Sửa địa chỉ';
+  formFields.innerHTML=''; columns=Array.from(new Set(columns.concat(Object.keys(obj))));
+  const keys=columns.length?columns:['tag','name','address'];
+  keys.forEach(k=>{
+    const val=obj[k]||''; const label=document.createElement('label'); label.textContent=k;
+    const input=document.createElement('input'); input.name=k; input.value=val; input.style.width='100%';
+    formFields.appendChild(label); formFields.appendChild(input);
+  });
+  modal.dataset.index=idx; modal.classList.add('show');
+}
+function closeModal(){ modal.classList.remove('show'); modal.dataset.index=''; }
+function editRow(i){ openModalFor(data[i],i); }
+function deleteRow(i){ if(confirm("Bạn có chắc muốn xóa?")){ pushUndo(); data.splice(i,1); renderTable(data); saveToLocal(); saveToServer(); }}
+
+// ==================== File Input ====================
+fileInput.addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const reader=new FileReader();
+  reader.onload=(ev)=>{
+    const bstr=ev.target.result;
+    const wb=XLSX.read(bstr,{type:'binary'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const arr=XLSX.utils.sheet_to_json(ws,{defval:''});
+    pushUndo(); data=arr.map(r=>normalizeObject(r)); columns=Object.keys(data[0]||{}); renderTable(data); saveToLocal(); saveToServer();
+  };
+  reader.readAsBinaryString(f);
+});
+
+// ==================== Load Example ====================
+document.getElementById('loadExample').addEventListener('click',()=>{
+  const csv='tag,name,address,phone\nKH001,Nhà máy A,123 Đường A,0123456789\nKH002,Kho B,456 Đường B,0987654321';
+  const wb=XLSX.read(csv,{type:'string'}); const ws=wb.Sheets[wb.SheetNames[0]];
+  const arr=XLSX.utils.sheet_to_json(ws,{defval:''}); pushUndo(); data=arr.map(r=>normalizeObject(r)); columns=Object.keys(data[0]||{}); renderTable(data); saveToLocal(); saveToServer();
+});
+
+// ==================== Export Excel ====================
+document.getElementById('exportBtn').addEventListener('click',()=>{
+  if(!data.length)return alert("Không có dữ liệu để xuất");
+  const ws=XLSX.utils.json_to_sheet(data);
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'addresses');
+  XLSX.writeFile(wb,'addresses_export.xlsx');
+});
+
+// ==================== Upload to server ====================
+document.getElementById('uploadServerBtn').addEventListener('click', async()=>{
+  const f=fileInput.files[0]; if(!f) return alert("Chọn file Excel trước!");
+  const formData=new FormData(); formData.append("file",f);
+  try{
+    const res=await fetch("/upload",{method:"POST",body:formData});
+    const json=await res.json();
+    if(json.success){ pushUndo(); data=json.data; columns=Object.keys(data[0]||{}); renderTable(data); alert("Tải lên server thành công!"); }
+    else alert("Lỗi: "+json.message);
+  }catch(e){alert("Lỗi kết nối server");}
+});
+
+// ==================== Modal Save / Cancel ====================
+document.getElementById('addBtn').addEventListener('click',()=>openModalFor({}));
+document.getElementById('cancelBtn').addEventListener('click',()=>closeModal());
+document.getElementById('saveBtn').addEventListener('click',()=>{
+  const inputs=formFields.querySelectorAll('input,textarea'); const obj={}; inputs.forEach(inp=>{obj[inp.name]=inp.value;});
+  const idx=modal.dataset.index; pushUndo();
+  if(idx==='') data.push(obj); else data[Number(idx)]=obj;
+  columns=Array.from(new Set(columns.concat(Object.keys(obj))));
+  renderTable(data); saveToLocal(); saveToServer(); closeModal();
+});
+
+// ==================== Undo / Redo ====================
+document.getElementById('undoBtn').addEventListener('click',()=>undo());
+document.getElementById('redoBtn').addEventListener('click',()=>redo());
+
+// ==================== Search ====================
+searchInput.addEventListener('input',()=>{
+  const q=searchInput.value.trim().toLowerCase();
+  if(!q){ renderTable(data); suggest.style.display='none'; return;}
+  const field=filterField.value.trim()||columns.join(',');
+  const fields=field.split(',').map(s=>s.trim()).filter(Boolean);
+  const results=data.filter(row=>fields.some(f=> (row[f]||'').toString().toLowerCase().includes(q)));
+  suggest.innerHTML='';
+  results.slice(0,10).forEach(r=>{
+    const text=(r[fields[0]]||Object.values(r)[0]||'').toString();
+    const d=document.createElement('div'); d.textContent=text;
+    d.onclick=()=>{searchInput.value=text;suggest.style.display='none';renderTable(results);}
+    suggest.appendChild(d);
+  });
+  suggest.style.display=results.length?'block':'none';
+});
+document.addEventListener('click',e=>{if(!e.target.closest('.search-list')) suggest.style.display='none';});
+
+// ==================== Init ====================
+loadFromLocal();
+loadFromServer().then(()=>renderTable(data));
+</script>
+</body>
+</html>
